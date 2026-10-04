@@ -6,7 +6,7 @@ from loguru import logger
 # تنظیم مسیر برای ایمپورت ماژول‌های داخلی
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
-from scraper.utills import farsi
+from scraper.utils import farsi
 
 class DigikalaClient:
     BASE_URL = "https://api.digikala.com/v1/search/"

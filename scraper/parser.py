@@ -5,9 +5,9 @@ from typing import List, Dict, Any
 # تنظیم مسیر برای ایمپورت ماژول‌های داخلی
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
-from scraper.utills import farsi
+from scraper.utils import farsi
 
-class DigikalaParser:
+class ProductParser:
     """استخراج و تمیزسازی فیلدهای مورد نیاز از داده‌های خام API دیجی‌کالا"""
     
     @staticmethod

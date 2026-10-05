@@ -8,6 +8,7 @@ from typing import List, Dict, Any
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 from scraper.utils import farsi
 
+
 class DataStorage:
     """مدیریت ذخیره‌سازی داده‌ها در فرمت‌های مختلف"""
 
@@ -15,7 +16,7 @@ class DataStorage:
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-    def save_to_excel(self, data: list[dict], filename: str) -> str:
+    def save_to_excel(self, data: List[Dict[str, Any]], filename: str) -> str:
         """ذخیره داده‌ها در فرمت اکسل"""
         if not data:
             return ""
@@ -40,18 +41,24 @@ class DataStorage:
 
 
 if __name__ == "__main__":
-    from scraper.client import DigikalaClient
-    from scraper.parser import DigikalaParser
+    from scraper.client import HttpClient
+    from scraper.parser import ProductParser
 
     print(farsi("شروع تست ماژول ذخیره‌سازی..."))
-    
-    client = DigikalaClient()
-    raw = client.fetch_search_results(keyword="کتاب اثر مرکب", page=1)
-    parsed = DigikalaParser.parse_search_results(raw)
-    
-    storage = DataStorage(output_dir="data")
-    csv_path = storage.save_to_csv(parsed, "test_output")
-    json_path = storage.save_to_json(parsed, "test_output")
-    
-    print(farsi(f"فایل CSV ایجاد شد: {csv_path}"))
-    print(farsi(f"فایل JSON ایجاد شد: {json_path}"))
+
+    client = HttpClient()
+    url = "https://www.technolife.ir/product/list/69_70_79/تمامی-گوشی%E2%80%8Cها"
+    html = client.fetch_html(url)
+
+    if html:
+        products = ProductParser.parse_product_list(html)
+        print(farsi(f"تعداد رکوردهای آماده ذخیره: {len(products)}"))
+
+        storage = DataStorage(output_dir="data")
+        csv_path = storage.save_to_csv(products, "technolife_mobiles")
+        json_path = storage.save_to_json(products, "technolife_mobiles")
+
+        print(farsi(f"فایل CSV ایجاد شد: {csv_path}"))
+        print(farsi(f"فایل JSON ایجاد شد: {json_path}"))
+    else:
+        print(farsi("خطا در دریافت اطلاعات برای تست ذخیره‌سازی."))

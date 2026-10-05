@@ -3,42 +3,38 @@ from pathlib import Path
 import requests
 from loguru import logger
 
-# تنظیم مسیر برای ایمپورت ماژول‌های داخلی
 sys.path.append(str(Path(__file__).resolve().parent.parent))
-
 from scraper.utils import farsi
 
-class DigikalaClient:
-    BASE_URL = "https://api.digikala.com/v1/search/"
 
+
+
+class HttpClient:
     def __init__(self):
         self.headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "fa,en;q=0.9",
         }
 
-    def fetch_search_results(self, keyword: str, page: int = 1) -> dict:
-        params = {
-            "q": keyword,
-            "page": page
-        }
+    def fetch_html(self, url: str) -> str | None:
+        """دریافت کد HTML خام صفحه بر اساس آدرس ورودی."""
         try:
-            response = requests.get(self.BASE_URL, params=params, headers=self.headers, timeout=10)
+            response = requests.get(url, headers=self.headers, timeout=12)
             response.raise_for_status()
-            return response.json()
+            return response.text
         except requests.RequestException as e:
-            logger.error(farsi(f"خطا در دریافت داده از دیجی‌کالا: {e}"))
-            return {}
+            logger.error(farsi(f"خطا در برقراری ارتباط با {url}: {e}"))
+            return None
+
 
 if __name__ == "__main__":
-    print(farsi("شروع تست ارتباط با API دیجی‌کالا..."))
-    client = DigikalaClient()
-    res = client.fetch_search_results(keyword="کتاب اثر مرکب", page=1)
-    
-    # استخراج لیست محصولات از ساختار جدید دیجی‌کالا
-    products = res.get("data", {}).get("products", [])
-    print(farsi(f"تعداد محصولات یافت‌شده: {len(products)}"))
-    
-    if products:
-        first = products[0]
-        print(farsi(f"عنوان نمونه: {first.get('title_fa')}"))
-        print(farsi(f"شناسه کالا: {first.get('id')}"))
+    print(farsi("شروع تست اتصال و دریافت HTML..."))
+    client = HttpClient()
+    test_url = "https://www.technolife.ir/product/list/69_70_79/%D8%AA%D9%85%D8%A7%D9%85%DB%8C-%DA%AF%D9%88%D8%B4%DB%8C%E2%80%8C%D9%87%D8%A7"
+    html = client.fetch_html(test_url)
+
+    if html:
+        print(farsi(f"دریافت با موفقیت انجام شد. حجم داده: {len(html)} کاراکتر"))
+    else:
+        print(farsi("خطا در دریافت اطلاعات صفحه."))

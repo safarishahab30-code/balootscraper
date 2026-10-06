@@ -5,16 +5,10 @@ def farsi(text: str) -> str:
     """اصلاح جهت و نحوه نمایش متون فارسی"""
     return get_display(arabic_reshaper.reshape(str(text)))
 
-def farsi_menu(message: str, choices: list):
-    """ایجاد منوی تعاملی با گزینه‌های فارسی اصلاح شده"""
-    import questionary
-    # اصلاح هر گزینه و بازگرداندن یک دیکشنری برای questionary
-    # که هم نمایش فارسی داشته باشد و هم مقدار اصلی را برگرداند
-    choices_dict = {farsi(c): c for c in choices}
-    
-    selected_display = questionary.select(
-        farsi(message), 
-        choices=list(choices_dict.keys())
-    ).ask()
-    
+from questionary import Choice
+
+def farsi_menu(items):
+    # items ورودی لیستی از تاپل‌هاست: [('متن_فارسی', 'مقدار_خروجی'), ...]
+    return [Choice(farsi(text), value=value) for text, value in items]
+
     return choices_dict.get(selected_display)

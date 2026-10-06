@@ -3,11 +3,11 @@ import json
 import pandas as pd
 from pathlib import Path
 from typing import List, Dict, Any
+from datetime import datetime
 
 # تنظیم مسیر برای ایمپورت ماژول‌های داخلی
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 from scraper.utils import farsi
-
 
 class DataStorage:
     """مدیریت ذخیره‌سازی داده‌ها در فرمت‌های مختلف"""
@@ -39,6 +39,27 @@ class DataStorage:
             json.dump(data, f, ensure_ascii=False, indent=2)
         return filepath
 
+    def save_automated(self, data: List[Dict[str, Any]], prefix: str = "auto_job", file_type: str = "json") -> Path:
+        """ذخیره اختصاصی برای تسک‌های اتوماسیون همراه با ثبت تاریخ و ساعت"""
+        auto_dir = self.output_dir / "automation"
+        auto_dir.mkdir(parents=True, exist_ok=True)
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{prefix}_{timestamp}"
+        
+        # ذخیره بر اساس فرمت انتخابی
+        if file_type == "csv":
+            filepath = auto_dir / f"{filename}.csv"
+            pd.DataFrame(data).to_csv(filepath, index=False, encoding="utf-8-sig")
+        elif file_type == "excel":
+            filepath = auto_dir / f"{filename}.xlsx"
+            pd.DataFrame(data).to_excel(filepath, index=False, engine="openpyxl")
+        else:
+            filepath = auto_dir / f"{filename}.json"
+            with open(filepath, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+                
+        return filepath
 
 if __name__ == "__main__":
     from scraper.client import HttpClient

@@ -12,9 +12,10 @@ from rich.text import Text
 
 from scraper.analyzer import analyze_products
 from scraper.client import HttpClient
-from scraper.parser import ProductParser
+from scraper.factory import get_parser
 from scraper.storage import DataStorage
-from scraper.utils import farsi
+from scraper.utils import farsi, farsi_menu
+from scraper.scheduler import ScraperScheduler
 
 
 console = Console()
@@ -22,7 +23,6 @@ DATA_DIR = Path("data")
 CANCELLED = object()
 
 
-# نگاشت برندهای فارسی به اسلاگ استاندارد تکنولایف
 BRAND_MAP = {
     "سامسونگ": "samsung",
     "شیائومی": "xiaomi",
@@ -33,6 +33,30 @@ BRAND_MAP = {
 }
 
 
+def build_page_url(base_url: str, page: int) -> str:
+    """الحاق صحیح شماره صفحه به URL پایه."""
+
+    if page <= 1:
+        return base_url
+
+    separator = "&" if "?" in base_url else "?"
+    return f"{base_url}{separator}page={page}"
+
+
+def detect_site_prefix(url: str) -> str:
+    """تشخیص نام سایت بر اساس URL."""
+
+    normalized_url = url.lower()
+
+    if "zoomit.ir" in normalized_url:
+        return "zoomit"
+
+    if "technolife.ir" in normalized_url or "technolife.com" in normalized_url:
+        return "technolife"
+
+    return "unknown"
+
+
 def run_scraper(
     total_pages: int = 1,
     brand: str = None,
@@ -40,8 +64,9 @@ def run_scraper(
     max_price: int = None,
     sort_order: str = None,
     export_format: str = "all",
+    custom_url: str = None,
 ):
-    """استخراج، فیلتر، مرتب‌سازی و ذخیره محصولات موبایل."""
+    """استخراج، فیلتر، مرتب‌سازی و ذخیره محصولات."""
 
     if total_pages < 1:
         print(farsi("تعداد صفحات باید حداقل ۱ باشد."))
@@ -68,37 +93,80 @@ def run_scraper(
 
     normalized_brand = brand.strip() if brand else None
 
-    if normalized_brand in BRAND_MAP:
+    # اولویت: لینک دستی > برند > صفحه پیش‌فرض
+    if custom_url:
+        base_url = custom_url.strip()
+
+    elif normalized_brand in BRAND_MAP:
         base_url = (
-            "https://www.technolife.com/category/mobile/mobile-phone/"
-            f"brand-{BRAND_MAP[normalized_brand]}"
+            "https://www.technolife.ir/product/list/164_163_130/"
+            f"?brand={BRAND_MAP[normalized_brand]}"
         )
+
     else:
         base_url = (
-            "https://www.technolife.com/category/mobile/mobile-phone"
+            "https://www.technolife.ir/product/list/164_163_130/"
         )
+    site_prefix = detect_site_prefix(base_url)
+
+    if site_prefix == "unknown":
+        print(
+            farsi(
+                "این دامنه پشتیبانی نمی‌شود. "
+                "فقط لینک‌های تکنولایف یا زومیت مجاز هستند."
+            )
+        )
+        return
+
+    try:
+        parser = get_parser(base_url)
+
+    except ValueError as error:
+        print(farsi(str(error)))
+        return
 
     all_products = []
 
     for page in range(1, total_pages + 1):
-        page_url = (
-            f"{base_url}?page={page}"
-            if page > 1
-            else base_url
-        )
+        page_url = build_page_url(base_url, page)
 
-        print(farsi(f"در حال دریافت صفحه {page} از: {page_url}"))
+        print(
+            farsi(
+                f"در حال دریافت صفحه {page} از: {page_url}"
+            )
+        )
 
         html_content = client.fetch_html(page_url)
 
         if not html_content:
-            print(farsi(f"محتوای صفحه {page} دریافت نشد."))
+            print(
+                farsi(
+                    f"محتوای صفحه {page} دریافت نشد."
+                )
+            )
             break
 
-        products = ProductParser.parse_product_list(html_content)
+        try:
+            products = parser.parse_product_list(html_content)
+
+        except AttributeError:
+            try:
+                products = parser.parse_products(html_content)
+
+            except AttributeError:
+                print(
+                    farsi(
+                        "متد پارس‌کردن محصولات در پارسر پیدا نشد."
+                    )
+                )
+                return
 
         if not products:
-            print(farsi(f"محصولی در صفحه {page} یافت نشد."))
+            print(
+                farsi(
+                    f"محصولی در صفحه {page} یافت نشد."
+                )
+            )
             break
 
         all_products.extend(products)
@@ -111,11 +179,16 @@ def run_scraper(
         )
 
     if not all_products:
-        print(farsi("هیچ داده‌ای برای پردازش یافت نشد."))
+        print(
+            farsi(
+                "هیچ داده‌ای برای پردازش یافت نشد."
+            )
+        )
         return
 
     # فیلتر نهایی برند بر اساس عنوان محصول
-    if normalized_brand:
+    # فقط برای حالت برند تکنولایف
+    if normalized_brand and not custom_url:
         print(
             farsi(
                 "\nدر حال بررسی و تطبیق نهایی برای برند: "
@@ -123,10 +196,14 @@ def run_scraper(
             )
         )
 
-        search_terms = [normalized_brand.lower()]
+        search_terms = [
+            normalized_brand.lower()
+        ]
 
         if normalized_brand in BRAND_MAP:
-            search_terms.append(BRAND_MAP[normalized_brand].lower())
+            search_terms.append(
+                BRAND_MAP[normalized_brand].lower()
+            )
 
         all_products = [
             product
@@ -172,7 +249,11 @@ def run_scraper(
         )
 
     if not all_products:
-        print(farsi("پس از اعمال فیلترها محصولی باقی نماند."))
+        print(
+            farsi(
+                "پس از اعمال فیلترها محصولی باقی نماند."
+            )
+        )
         return
 
     # مرتب‌سازی بر اساس قیمت
@@ -194,7 +275,10 @@ def run_scraper(
             reverse=sort_order == "desc",
         )
 
-        all_products = products_with_price + products_without_price
+        all_products = (
+            products_with_price
+            + products_without_price
+        )
 
         sort_title = (
             "نزولی"
@@ -208,28 +292,40 @@ def run_scraper(
             )
         )
 
-    base_filename = "technolife_mobiles"
+    base_filename = f"{site_prefix}_products"
 
     if export_format in ("csv", "all"):
         csv_path = storage.save_to_csv(
             all_products,
             base_filename,
         )
-        print(farsi(f"گزارش CSV: {csv_path}"))
+        print(
+            farsi(
+                f"گزارش CSV: {csv_path}"
+            )
+        )
 
     if export_format in ("json", "all"):
         json_path = storage.save_to_json(
             all_products,
             base_filename,
         )
-        print(farsi(f"گزارش JSON: {json_path}"))
+        print(
+            farsi(
+                f"گزارش JSON: {json_path}"
+            )
+        )
 
     if export_format in ("excel", "all"):
         excel_path = storage.save_to_excel(
             all_products,
             base_filename,
         )
-        print(farsi(f"گزارش Excel: {excel_path}"))
+        print(
+            farsi(
+                f"گزارش Excel: {excel_path}"
+            )
+        )
 
     print(
         farsi(
@@ -240,7 +336,8 @@ def run_scraper(
 
     print(
         farsi(
-            "عملیات استخراج و ذخیره‌سازی با موفقیت پایان یافت."
+            "عملیات استخراج و ذخیره‌سازی "
+            "با موفقیت پایان یافت."
         )
     )
 
@@ -261,7 +358,11 @@ def run_scraper(
         )
     )
 
-    print(farsi(f"تعداد کل: {stats['total']}"))
+    print(
+        farsi(
+            f"تعداد کل: {stats['total']}"
+        )
+    )
 
     min_p = (
         f"{stats['min_price']:,} تومان"
@@ -281,9 +382,23 @@ def run_scraper(
         else "نامشخص"
     )
 
-    print(farsi(f"حداقل قیمت: {min_p}"))
-    print(farsi(f"حداکثر قیمت: {max_p}"))
-    print(farsi(f"میانگین قیمت: {avg_p}"))
+    print(
+        farsi(
+            f"حداقل قیمت: {min_p}"
+        )
+    )
+
+    print(
+        farsi(
+            f"حداکثر قیمت: {max_p}"
+        )
+    )
+
+    print(
+        farsi(
+            f"میانگین قیمت: {avg_p}"
+        )
+    )
 
 
 def normalize_digits(value: str) -> str:
@@ -340,14 +455,20 @@ def ask_integer(
 
         try:
             number = int(normalized_answer)
+
         except ValueError:
-            print(farsi("لطفاً یک عدد معتبر وارد کن."))
+            print(
+                farsi(
+                    "لطفاً یک عدد معتبر وارد کن."
+                )
+            )
             continue
 
         if number < minimum:
             print(
                 farsi(
-                    f"عدد واردشده باید حداقل {minimum} باشد."
+                    f"عدد واردشده باید حداقل "
+                    f"{minimum} باشد."
                 )
             )
             continue
@@ -367,24 +488,31 @@ def show_saved_files():
     if not DATA_DIR.exists():
         print(
             farsi(
-                "پوشه data هنوز ساخته نشده و خروجی‌ای وجود ندارد."
+                "پوشه data هنوز ساخته نشده "
+                "و خروجی‌ای وجود ندارد."
             )
         )
         return
 
     files = [
         path
-        for path in DATA_DIR.glob("technolife_mobiles.*")
+        for path in DATA_DIR.iterdir()
         if (
             path.is_file()
-            and path.suffix.lower() in valid_extensions
+            and path.suffix.lower()
+            in valid_extensions
+            and (
+                path.name.startswith("technolife_")
+                or path.name.startswith("zoomit_")
+            )
         )
     ]
 
     if not files:
         print(
             farsi(
-                "هنوز فایل خروجی‌ای در پوشه data پیدا نشد."
+                "هنوز فایل خروجی‌ای در پوشه data "
+                "پیدا نشد."
             )
         )
         return
@@ -400,9 +528,17 @@ def show_saved_files():
         header_style="bold cyan",
     )
 
-    table.add_column(farsi("نام فایل"))
-    table.add_column(farsi("فرمت"))
-    table.add_column(farsi("آخرین تغییر"))
+    table.add_column(
+        farsi("نام فایل")
+    )
+
+    table.add_column(
+        farsi("فرمت")
+    )
+
+    table.add_column(
+        farsi("آخرین تغییر")
+    )
 
     for file_path in files:
         modified_time = datetime.fromtimestamp(
@@ -416,6 +552,94 @@ def show_saved_files():
         )
 
     console.print(table)
+
+
+def run_automation_menu():
+    """تنظیم و اجرای زمان‌بند."""
+    interval = ask_integer("بازه زمانی اجرای خودکار (به دقیقه):", default=60, minimum=1)
+    if interval is CANCELLED: return
+    print(farsi(f"موتور زمان‌بند فعال شد. (هر {interval} دقیقه) - برای توقف Ctrl+C را بزن."))
+    try:
+        scheduler = ScraperScheduler(interval_minutes=interval)
+        scheduler.start()
+    except KeyboardInterrupt:
+        print(farsi("\nتوقف زمان‌بند."))
+
+
+def run_custom_url_scrape():
+    """گرفتن لینک مستقیم از کاربر و اجرای اسکرپر."""
+
+    url = questionary.text(
+        farsi(
+            "لینک صفحه مورد نظر را وارد کن:"
+        )
+    ).ask()
+
+    if url is None:
+        return
+
+    url = url.strip()
+
+    if not url:
+        print(
+            farsi(
+                "هیچ لینکی وارد نشد."
+            )
+        )
+        return
+
+    if not url.startswith(
+        ("http://", "https://")
+    ):
+        print(
+            farsi(
+                "لینک معتبر نیست؛ باید با "
+                "http:// یا https:// شروع شود."
+            )
+        )
+        return
+
+    pages = ask_integer(
+        "تعداد صفحات برای استخراج:",
+        default=1,
+        minimum=1,
+    )
+
+    if pages is CANCELLED:
+        return
+
+    format_choice = questionary.select(
+        farsi(
+            "فرمت ذخیره‌سازی را انتخاب کن:"
+        ),
+        choices=[
+            Choice(
+                "CSV",
+                value="csv",
+            ),
+            Choice(
+                "JSON",
+                value="json",
+            ),
+            Choice(
+                "Excel",
+                value="excel",
+            ),
+            Choice(
+                farsi("همه فرمت‌ها"),
+                value="all",
+            ),
+        ],
+    ).ask()
+
+    if format_choice is None:
+        return
+
+    run_scraper(
+        total_pages=pages,
+        export_format=format_choice,
+        custom_url=url,
+    )
 
 
 def run_custom_scrape():
@@ -437,7 +661,9 @@ def run_custom_scrape():
     )
 
     selected_brand = questionary.select(
-        farsi("برند مورد نظر را انتخاب کن:"),
+        farsi(
+            "برند مورد نظر را انتخاب کن:"
+        ),
         choices=brand_choices,
     ).ask()
 
@@ -460,7 +686,8 @@ def run_custom_scrape():
         return
 
     min_price = ask_integer(
-        "حداقل قیمت به تومان؛ برای نداشتن حداقل، خالی بگذار:",
+        "حداقل قیمت به تومان؛ "
+        "برای نداشتن حداقل، خالی بگذار:",
         minimum=0,
         allow_empty=True,
     )
@@ -469,7 +696,8 @@ def run_custom_scrape():
         return
 
     max_price = ask_integer(
-        "حداکثر قیمت به تومان؛ برای نداشتن حداکثر، خالی بگذار:",
+        "حداکثر قیمت به تومان؛ "
+        "برای نداشتن حداکثر، خالی بگذار:",
         minimum=0,
         allow_empty=True,
     )
@@ -478,18 +706,24 @@ def run_custom_scrape():
         return
 
     sort_choice = questionary.select(
-        farsi("مرتب‌سازی قیمت را انتخاب کن:"),
+        farsi(
+            "مرتب‌سازی قیمت را انتخاب کن:"
+        ),
         choices=[
             Choice(
                 farsi("بدون مرتب‌سازی"),
                 value="none",
             ),
             Choice(
-                farsi("صعودی؛ ارزان‌ترین ابتدا"),
+                farsi(
+                    "صعودی؛ ارزان‌ترین ابتدا"
+                ),
                 value="asc",
             ),
             Choice(
-                farsi("نزولی؛ گران‌ترین ابتدا"),
+                farsi(
+                    "نزولی؛ گران‌ترین ابتدا"
+                ),
                 value="desc",
             ),
         ],
@@ -499,11 +733,22 @@ def run_custom_scrape():
         return
 
     format_choice = questionary.select(
-        farsi("فرمت ذخیره‌سازی را انتخاب کن:"),
+        farsi(
+            "فرمت ذخیره‌سازی را انتخاب کن:"
+        ),
         choices=[
-            Choice("CSV", value="csv"),
-            Choice("JSON", value="json"),
-            Choice("Excel", value="excel"),
+            Choice(
+                "CSV",
+                value="csv",
+            ),
+            Choice(
+                "JSON",
+                value="json",
+            ),
+            Choice(
+                "Excel",
+                value="excel",
+            ),
             Choice(
                 farsi("همه فرمت‌ها"),
                 value="all",
@@ -535,7 +780,8 @@ def run_interactive_menu():
         Panel.fit(
             Text(
                 farsi(
-                    "سیستم استخراج و پایش قیمت تکنولایف"
+                    "سیستم استخراج و پایش "
+                    "محصولات تکنولایف و زومیت"
                 )
             ),
             border_style="cyan",
@@ -543,40 +789,20 @@ def run_interactive_menu():
     )
 
     menu_choices = [
-        Choice(
-            farsi(
-                "شروع استخراج سریع با تنظیمات پیش‌فرض"
-            ),
-            value="quick",
-        ),
-        Choice(
-            farsi(
-                "استخراج با فیلتر و تنظیمات سفارشی"
-            ),
-            value="custom",
-        ),
-        Choice(
-            farsi(
-                "نمایش فایل‌های خروجی ذخیره‌شده"
-            ),
-            value="files",
-        ),
-        Choice(
-            farsi("خروج"),
-            value="exit",
-        ),
+        Choice(farsi("شروع استخراج سریع با تنظیمات پیش‌فرض"), value="quick"),
+        Choice(farsi("استخراج با فیلتر و تنظیمات سفارشی"), value="custom"),
+        Choice(farsi("استخراج از طریق لینک مستقیم (URL)"), value="url"),
+        Choice(farsi("اتوماسیون (اجرای زمان‌بندی‌شده)"), value="automation"),
+        Choice(farsi("نمایش فایل‌های خروجی ذخیره‌شده"), value="files"),
+        Choice(farsi("خروج"), value="exit"),
     ]
 
     while True:
-        try:
-            action = questionary.select(
-                farsi("عملیات مورد نظر را انتخاب کن:"),
-                choices=menu_choices,
-            ).ask()
-
-        except (KeyboardInterrupt, EOFError):
-            print(farsi("\nخروج از منو."))
-            return
+        # اصلاح: استفاده مستقیم از questionary.select
+        action = questionary.select(
+            farsi("عملیات مورد نظر را انتخاب کن:"),
+            choices=menu_choices
+        ).ask()
 
         if action is None or action == "exit":
             print(farsi("خروج از برنامه."))
@@ -584,13 +810,14 @@ def run_interactive_menu():
 
         if action == "quick":
             run_scraper()
-
         elif action == "custom":
             run_custom_scrape()
-
+        elif action == "url":
+            run_custom_url_scrape()
+        elif action == "automation":
+            run_automation_menu()
         elif action == "files":
             show_saved_files()
-
 
 def build_argument_parser():
     """ساخت پارسر آرگومان‌های خط فرمان."""
@@ -605,7 +832,9 @@ def build_argument_parser():
         "--brand",
         type=str,
         default=None,
-        help=farsi("فیلتر بر اساس نام برند"),
+        help=farsi(
+            "فیلتر بر اساس نام برند"
+        ),
     )
 
     parser.add_argument(
@@ -613,7 +842,8 @@ def build_argument_parser():
         type=int,
         default=1,
         help=farsi(
-            "تعداد صفحات برای اسکرپ؛ پیش‌فرض: ۱"
+            "تعداد صفحات برای اسکرپ؛ "
+            "پیش‌فرض: ۱"
         ),
     )
 
@@ -621,19 +851,26 @@ def build_argument_parser():
         "--min-price",
         type=int,
         default=None,
-        help=farsi("حداقل قیمت به تومان"),
+        help=farsi(
+            "حداقل قیمت به تومان"
+        ),
     )
 
     parser.add_argument(
         "--max-price",
         type=int,
         default=None,
-        help=farsi("حداکثر قیمت به تومان"),
+        help=farsi(
+            "حداکثر قیمت به تومان"
+        ),
     )
 
     parser.add_argument(
         "--sort",
-        choices=["asc", "desc"],
+        choices=[
+            "asc",
+            "desc",
+        ],
         default=None,
         help=farsi(
             "مرتب‌سازی قیمت: asc یا desc"
@@ -650,7 +887,17 @@ def build_argument_parser():
         ],
         default="all",
         help=farsi(
-            "فرمت ذخیره‌سازی: csv، json، excel یا all"
+            "فرمت ذخیره‌سازی: "
+            "csv، json، excel یا all"
+        ),
+    )
+
+    parser.add_argument(
+        "--url",
+        type=str,
+        default=None,
+        help=farsi(
+            "لینک مستقیم صفحه برای استخراج"
         ),
     )
 
@@ -674,10 +921,15 @@ def main():
             max_price=args.max_price,
             sort_order=args.sort,
             export_format=args.format,
+            custom_url=args.url,
         )
 
     except KeyboardInterrupt:
-        print(farsi("\nعملیات توسط کاربر متوقف شد."))
+        print(
+            farsi(
+                "\nعملیات توسط کاربر متوقف شد."
+            )
+        )
 
 
 if __name__ == "__main__":

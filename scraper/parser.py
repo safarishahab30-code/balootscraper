@@ -42,7 +42,7 @@ class ProductParser:
             if not raw_href:
                 continue
 
-            full_url = raw_href if raw_href.startswith("http") else f"https://www.technolife.ir{raw_href}"
+            full_url = raw_href if raw_href.startswith("http") else f"https://www.technolife.com{raw_href}"
             clean_url = full_url.split("?")[0]
 
             if clean_url in seen_urls:
@@ -107,7 +107,7 @@ if __name__ == "__main__":
     print(farsi("در حال تست پارسر HTML..."))
     client = HttpClient()
 
-    url = "https://www.technolife.ir/product/list/69_70_79/تمامی-گوشی%E2%80%8Cها"
+    url = "https://www.technolife.com/category/mobile/mobile-phone/brand-samsung"
     html = client.fetch_html(url)
 
     if html:

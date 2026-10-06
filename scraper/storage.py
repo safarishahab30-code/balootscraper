@@ -47,7 +47,7 @@ if __name__ == "__main__":
     print(farsi("شروع تست ماژول ذخیره‌سازی..."))
 
     client = HttpClient()
-    url = "https://www.technolife.ir/product/list/69_70_79/تمامی-گوشی%E2%80%8Cها"
+    url = "https://www.technolife.com/category/mobile/mobile-phone/brand-samsung"
     html = client.fetch_html(url)
 
     if html:
@@ -57,8 +57,10 @@ if __name__ == "__main__":
         storage = DataStorage(output_dir="data")
         csv_path = storage.save_to_csv(products, "technolife_mobiles")
         json_path = storage.save_to_json(products, "technolife_mobiles")
+        excel_path = storage.save_to_excel(products, "technolife_mobiles")
 
         print(farsi(f"فایل CSV ایجاد شد: {csv_path}"))
         print(farsi(f"فایل JSON ایجاد شد: {json_path}"))
+        print(farsi(f"فایل اکسل ایجاد شد: {excel_path}"))
     else:
         print(farsi("خطا در دریافت اطلاعات برای تست ذخیره‌سازی."))

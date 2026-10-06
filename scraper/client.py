@@ -29,12 +29,16 @@ class HttpClient:
 
 
 if __name__ == "__main__":
-    print(farsi("شروع تست اتصال و دریافت HTML..."))
     client = HttpClient()
-    test_url = "https://www.technolife.ir/product/list/69_70_79/%D8%AA%D9%85%D8%A7%D9%85%DB%8C-%DA%AF%D9%88%D8%B4%DB%8C%E2%80%8C%D9%87%D8%A7"
+    test_url = "https://www.technolife.com/category/mobile/mobile-phone/brand-samsung"
+    print(farsi("شروع تست اتصال و دریافت HTML..."))
     html = client.fetch_html(test_url)
-
+    print(farsi(f"تعداد کاراکترهای دریافت شده: {len(html)}"))
     if html:
-        print(farsi(f"دریافت با موفقیت انجام شد. حجم داده: {len(html)} کاراکتر"))
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(html, 'html.parser')
+        page_title = soup.title.string.strip() if soup.title else "بدون عنوان"
+        print(farsi(f"عنوان صفحه دریافت شده: {page_title}"))
+        print(farsi(f"حجم داده: {len(html)} کاراکتر"))
     else:
         print(farsi("خطا در دریافت اطلاعات صفحه."))

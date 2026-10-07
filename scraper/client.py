@@ -3,11 +3,9 @@ from pathlib import Path
 import requests
 from loguru import logger
 
+# تنظیم مسیر برای دسترسی به ماژول‌های پروژه
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 from scraper.utils import farsi
-
-
-
 
 class HttpClient:
     def __init__(self):
@@ -18,22 +16,26 @@ class HttpClient:
         }
 
     def fetch_html(self, url: str) -> str | None:
-        """دریافت کد HTML خام صفحه بر اساس آدرس ورودی."""
+        """دریافت کد HTML خام صفحه با مدیریت دامنه ir."""
+        # اصلاح دامنه قبل از درخواست برای جلوگیری از ریدایرکت ناخواسته
+        url = url.replace(".com", ".ir")
+
         try:
-            response = requests.get(url, headers=self.headers, timeout=12)
+            # غیرفعال کردن ریدایرکت خودکار جهت کنترل دقیق روی دامین ir
+            response = requests.get(url, headers=self.headers, timeout=12, allow_redirects=False)
             response.raise_for_status()
             return response.text
         except requests.RequestException as e:
             logger.error(farsi(f"خطا در برقراری ارتباط با {url}: {e}"))
             return None
 
-
 if __name__ == "__main__":
     client = HttpClient()
-    test_url = "https://www.technolife.com/category/mobile/mobile-phone/brand-samsung"
+    # تست با دامین صحیح و فرمت استاندارد تکنولایف
+    test_url = "https://www.technolife.ir/product/list/164_163_130"
     print(farsi("شروع تست اتصال و دریافت HTML..."))
     html = client.fetch_html(test_url)
-    print(farsi(f"تعداد کاراکترهای دریافت شده: {len(html)}"))
+
     if html:
         from bs4 import BeautifulSoup
         soup = BeautifulSoup(html, 'html.parser')

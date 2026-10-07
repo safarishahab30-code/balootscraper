@@ -1,8 +1,11 @@
 import argparse
 import sys
+import sqlite3
+import time
 from datetime import datetime
 from pathlib import Path
-
+from scraper.storage import should_scrape, update_tracker
+sys.stdout.reconfigure(encoding='utf-8')
 import questionary
 from questionary import Choice
 from rich.console import Console
@@ -14,7 +17,7 @@ from scraper.analyzer import analyze_products
 from scraper.client import HttpClient
 from scraper.factory import get_parser
 from scraper.storage import DataStorage
-from scraper.utils import farsi, farsi_menu
+from scraper.utils import farsi_menu, farsi # چک کن این مسیر درست باشد
 from scraper.scheduler import ScraperScheduler
 
 
@@ -187,7 +190,6 @@ def run_scraper(
         return
 
     # فیلتر نهایی برند بر اساس عنوان محصول
-    # فقط برای حالت برند تکنولایف
     if normalized_brand and not custom_url:
         print(
             farsi(
@@ -432,7 +434,7 @@ def ask_integer(
 
     while True:
         answer = questionary.text(
-            farsi(prompt),
+            farsi_menu(prompt),
             default=default_value,
         ).ask()
 
@@ -554,23 +556,11 @@ def show_saved_files():
     console.print(table)
 
 
-def run_automation_menu():
-    """تنظیم و اجرای زمان‌بند."""
-    interval = ask_integer("بازه زمانی اجرای خودکار (به دقیقه):", default=60, minimum=1)
-    if interval is CANCELLED: return
-    print(farsi(f"موتور زمان‌بند فعال شد. (هر {interval} دقیقه) - برای توقف Ctrl+C را بزن."))
-    try:
-        scheduler = ScraperScheduler(interval_minutes=interval)
-        scheduler.start()
-    except KeyboardInterrupt:
-        print(farsi("\nتوقف زمان‌بند."))
-
-
 def run_custom_url_scrape():
     """گرفتن لینک مستقیم از کاربر و اجرای اسکرپر."""
 
     url = questionary.text(
-        farsi(
+        farsi_menu(
             "لینک صفحه مورد نظر را وارد کن:"
         )
     ).ask()
@@ -609,7 +599,7 @@ def run_custom_url_scrape():
         return
 
     format_choice = questionary.select(
-        farsi(
+        farsi_menu(
             "فرمت ذخیره‌سازی را انتخاب کن:"
         ),
         choices=[
@@ -643,134 +633,128 @@ def run_custom_url_scrape():
 
 
 def run_custom_scrape():
-    """گرفتن تنظیمات از کاربر و اجرای اسکرپر."""
+    # ۱. آماده‌سازی گزینه‌های برند
+    brand_options = [{"name": "همه برندها", "value": "all"}]
+    brand_options.extend([{"name": b, "value": b} for b in BRAND_MAP])
 
-    brand_choices = [
-        Choice(
-            farsi("همه برندها"),
-            value="all",
-        )
+    selected_brand = farsi_menu("برند مورد نظر را انتخاب کن:", brand_options)
+    if selected_brand is None: return
+    brand = None if selected_brand == "all" else selected_brand
+
+    # ۲. دریافت ورودی‌های عددی (تغییر نمی‌کند)
+    pages = ask_integer("تعداد صفحات برای استخراج:", default=1, minimum=1)
+    if pages is CANCELLED: return
+
+    min_price = ask_integer("حداقل قیمت به تومان؛ خالی بگذار:", minimum=0, allow_empty=True)
+    if min_price is CANCELLED: return
+
+    max_price = ask_integer("حداکثر قیمت به تومان؛ خالی بگذار:", minimum=0, allow_empty=True)
+    if max_price is CANCELLED: return
+
+    # ۳. منوهای مرتب‌سازی و فرمت (اصلاح شده)
+    sort_options = [
+        {"name": "بدون مرتب‌سازی", "value": "none"},
+        {"name": "صعودی؛ ارزان‌ترین ابتدا", "value": "asc"},
+        {"name": "نزولی؛ گران‌ترین ابتدا", "value": "desc"},
     ]
+    sort_choice = farsi_menu("مرتب‌سازی قیمت را انتخاب کن:", sort_options)
+    if sort_choice is None: return
 
-    brand_choices.extend(
-        Choice(
-            farsi(brand_name),
-            value=brand_name,
-        )
-        for brand_name in BRAND_MAP
-    )
+    format_options = [
+        {"name": "CSV", "value": "csv"},
+        {"name": "JSON", "value": "json"},
+        {"name": "Excel", "value": "excel"},
+        {"name": "همه فرمت‌ها", "value": "all"},
+    ]
+    format_choice = farsi_menu("فرمت ذخیره‌سازی را انتخاب کن:", format_options)
+    if format_choice is None: return
 
-    selected_brand = questionary.select(
-        farsi(
-            "برند مورد نظر را انتخاب کن:"
-        ),
-        choices=brand_choices,
-    ).ask()
-
-    if selected_brand is None:
-        return
-
-    brand = (
-        None
-        if selected_brand == "all"
-        else selected_brand
-    )
-
-    pages = ask_integer(
-        "تعداد صفحات برای استخراج:",
-        default=1,
-        minimum=1,
-    )
-
-    if pages is CANCELLED:
-        return
-
-    min_price = ask_integer(
-        "حداقل قیمت به تومان؛ "
-        "برای نداشتن حداقل، خالی بگذار:",
-        minimum=0,
-        allow_empty=True,
-    )
-
-    if min_price is CANCELLED:
-        return
-
-    max_price = ask_integer(
-        "حداکثر قیمت به تومان؛ "
-        "برای نداشتن حداکثر، خالی بگذار:",
-        minimum=0,
-        allow_empty=True,
-    )
-
-    if max_price is CANCELLED:
-        return
-
-    sort_choice = questionary.select(
-        farsi(
-            "مرتب‌سازی قیمت را انتخاب کن:"
-        ),
-        choices=[
-            Choice(
-                farsi("بدون مرتب‌سازی"),
-                value="none",
-            ),
-            Choice(
-                farsi(
-                    "صعودی؛ ارزان‌ترین ابتدا"
-                ),
-                value="asc",
-            ),
-            Choice(
-                farsi(
-                    "نزولی؛ گران‌ترین ابتدا"
-                ),
-                value="desc",
-            ),
-        ],
-    ).ask()
-
-    if sort_choice is None:
-        return
-
-    format_choice = questionary.select(
-        farsi(
-            "فرمت ذخیره‌سازی را انتخاب کن:"
-        ),
-        choices=[
-            Choice(
-                "CSV",
-                value="csv",
-            ),
-            Choice(
-                "JSON",
-                value="json",
-            ),
-            Choice(
-                "Excel",
-                value="excel",
-            ),
-            Choice(
-                farsi("همه فرمت‌ها"),
-                value="all",
-            ),
-        ],
-    ).ask()
-
-    if format_choice is None:
-        return
-
+    # ۴. اجرا
     run_scraper(
         total_pages=pages,
         brand=brand,
         min_price=min_price,
         max_price=max_price,
-        sort_order=(
-            None
-            if sort_choice == "none"
-            else sort_choice
-        ),
+        sort_order=None if sort_choice == "none" else sort_choice,
         export_format=format_choice,
     )
+
+
+def run_manual_tracker():
+    """بررسی و رصد دستی لینک با شرط دوره ۳ روزه."""
+    url = questionary.text(
+        farsi_menu("لینک مورد نظر برای رصد را وارد کن:")
+    ).ask()
+
+    if not url:
+        return
+
+    url = url.strip()
+    conn = sqlite3.connect("baloot.db")
+
+    try:
+        # اطمینان از وجود جدول رصد دوره‌ای با ستون‌های کامل
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS tracked_targets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                url TEXT UNIQUE NOT NULL,
+                interval_days INTEGER DEFAULT 3,
+                last_scraped_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        # اضافه کردن ستون در صورت ساخت قبلی جدول بدون این ستون
+        try:
+            conn.execute("ALTER TABLE tracked_targets ADD COLUMN interval_days INTEGER DEFAULT 3")
+        except sqlite3.OperationalError:
+            pass
+
+        conn.commit()
+
+        # بررسی شرط ۳ روز
+        if should_scrape(conn, url, interval_days=3):
+            print(farsi("موعد استخراج رسیده است. در حال اجرای اسکرپر..."))
+            run_scraper(total_pages=1, custom_url=url, export_format="all")
+            update_tracker(conn, url, interval_days=3)
+            print(farsi("استخراج انجام شد و تاریخ رصد بروزرسانی گردید."))
+        else:
+            print(farsi("کمتر از ۳ روز از آخرین استخراج گذشته است؛ نیازی به اسکرپ نیست."))
+    finally:
+        conn.close()
+
+
+def run_scheduler():
+    """اجرای زمان‌بندی‌شده و خودکار برای همه لینک‌های ثبت‌شده در دیتابیس."""
+    print(farsi("اتوماسیون رصد فعال شد. برای توقف Ctrl+C را فشار دهید..."))
+
+    conn = sqlite3.connect("baloot.db")
+
+    try:
+        while True:
+            cursor = conn.cursor()
+            cursor.execute("SELECT url, interval_days FROM tracked_targets")
+            targets = cursor.fetchall()
+
+            if not targets:
+                print(farsi("هیچ لینکی در دیتابیس برای رصد خودکار ثبت نشده است."))
+                break
+
+            for url, interval in targets:
+                interval = interval if interval is not None else 3
+                if should_scrape(conn, url, interval_days=interval):
+                    print(farsi(f"موعد استخراج خودکار: {url}"))
+                    run_scraper(total_pages=1, custom_url=url, export_format="all")
+                    update_tracker(conn, url, interval_days=interval)
+                    print(farsi(f"استخراج انجام شد: {url}"))
+                else:
+                    print(farsi(f"هنوز موعد استخراج نرسیده است: {url}"))
+
+            print(farsi("بررسی بعدی ۱ ساعت دیگر انجام می‌شود..."))
+            time.sleep(3600)
+
+    except KeyboardInterrupt:
+        print(farsi("\nاتوماسیون توسط کاربر متوقف شد."))
+    finally:
+        conn.close()
 
 
 def run_interactive_menu():
@@ -778,12 +762,7 @@ def run_interactive_menu():
 
     console.print(
         Panel.fit(
-            Text(
-                farsi(
-                    "سیستم استخراج و پایش "
-                    "محصولات تکنولایف و زومیت"
-                )
-            ),
+            Text(farsi("سیستم استخراج و پایش محصولات تکنولایف و زومیت")),
             border_style="cyan",
         )
     )
@@ -792,17 +771,14 @@ def run_interactive_menu():
         Choice(farsi("شروع استخراج سریع با تنظیمات پیش‌فرض"), value="quick"),
         Choice(farsi("استخراج با فیلتر و تنظیمات سفارشی"), value="custom"),
         Choice(farsi("استخراج از طریق لینک مستقیم (URL)"), value="url"),
+        Choice(farsi("بررسی و رصد دوره‌ای لینک (دستی)"), value="tracker"),
         Choice(farsi("اتوماسیون (اجرای زمان‌بندی‌شده)"), value="automation"),
         Choice(farsi("نمایش فایل‌های خروجی ذخیره‌شده"), value="files"),
         Choice(farsi("خروج"), value="exit"),
     ]
 
     while True:
-        # اصلاح: استفاده مستقیم از questionary.select
-        action = questionary.select(
-            farsi("عملیات مورد نظر را انتخاب کن:"),
-            choices=menu_choices
-        ).ask()
+        action = farsi_menu("عملیات مورد نظر را انتخاب کن:", menu_choices)
 
         if action is None or action == "exit":
             print(farsi("خروج از برنامه."))
@@ -815,9 +791,11 @@ def run_interactive_menu():
         elif action == "url":
             run_custom_url_scrape()
         elif action == "automation":
-            run_automation_menu()
+            run_scheduler()
         elif action == "files":
             show_saved_files()
+        elif action == "tracker":
+            run_manual_tracker()
 
 def build_argument_parser():
     """ساخت پارسر آرگومان‌های خط فرمان."""
@@ -909,7 +887,6 @@ def main():
     args = parser.parse_args()
 
     try:
-        # اجرای بدون آرگومان، منوی تعاملی را باز می‌کند.
         if len(sys.argv) == 1:
             run_interactive_menu()
             return

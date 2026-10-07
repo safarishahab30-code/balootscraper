@@ -85,3 +85,61 @@ if __name__ == "__main__":
         print(farsi(f"فایل اکسل ایجاد شد: {excel_path}"))
     else:
         print(farsi("خطا در دریافت اطلاعات برای تست ذخیره‌سازی."))
+import sqlite3
+from datetime import datetime
+
+def save_to_db(products: list, db_path: str = "prices.db"):
+    with sqlite3.connect(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS price_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT,
+                price TEXT,
+                link TEXT,
+                scraped_at TEXT
+            )
+        """)
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        records = [(p["title"], p["price"], p["link"], now) for p in products]
+        cursor.executemany(
+            "INSERT INTO price_history (title, price, link, scraped_at) VALUES (?, ?, ?, ?)",
+            records
+        )
+        conn.commit()
+from datetime import datetime, timedelta
+
+def init_tracker_table(conn):
+    """ایجاد جدول پیگیری لینک‌ها و دوره‌های اسکرپ"""
+    with conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS tracked_targets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                url TEXT UNIQUE NOT NULL,
+                interval_days INTEGER DEFAULT 3,
+                last_scraped_at TIMESTAMP
+            )
+        """)
+
+def should_scrape(conn, url: str, interval_days: int = 3) -> bool:
+    """بررسی اینکه آیا ۳ روز گذشته و نیاز به اسکرپ دارد یا خیر"""
+    cursor = conn.cursor()
+    cursor.execute("SELECT last_scraped_at FROM tracked_targets WHERE url = ?", (url,))
+    row = cursor.fetchone()
+    
+    if not row or not row[0]:
+        return True  # بار اول است
+    
+    last_date = datetime.fromisoformat(row[0])
+    return datetime.now() >= last_date + timedelta(days=interval_days)
+
+def update_tracker(conn, url: str, interval_days: int = 3):
+    """به‌روزرسانی تاریخ آخرین اسکرپ برای لینک"""
+    with conn:
+        conn.execute("""
+            INSERT INTO tracked_targets (url, interval_days, last_scraped_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(url) DO UPDATE SET
+                last_scraped_at = excluded.last_scraped_at,
+                interval_days = excluded.interval_days
+        """, (url, interval_days, datetime.now().isoformat()))

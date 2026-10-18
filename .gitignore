@@ -6,4 +6,6 @@ __pycache__/
 data/*.csv
 data/*.json
 *.gguf
-
+# Debug and dump files
+debug_*
+*.dump.html

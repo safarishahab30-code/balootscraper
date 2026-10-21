@@ -1,11 +1,27 @@
+﻿# Virtual Environment
+venv/
+env/
+.env
+
+# Python Cache
 __pycache__/
 *.pyc
-*.xlsx
-.env
-.vscode/
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Databases & Large Files / Models
+*.db
+*.sqlite3
+*.gguf
+Llama-3.2-3B-Instruct-Q4_K_M.gguf
+
+# Output Data
 data/*.csv
 data/*.json
-*.gguf
-# Debug and dump files
-debug_*
-*.dump.html
+data/*.xlsx
+debug_*.html
+
+# IDE
+.vscode/
+.idea/

@@ -108,7 +108,7 @@ def run_scraper(
 
     else:
         base_url = (
-            "https://www.technolife.ir/product/list/164_163_130/"
+            "https://www.technolife.ir/product/list/69_70_77/گوشی-موبایل"
         )
     site_prefix = detect_site_prefix(base_url)
 
@@ -434,7 +434,7 @@ def ask_integer(
 
     while True:
         answer = questionary.text(
-            farsi_menu(prompt),
+            farsi(prompt),
             default=default_value,
         ).ask()
 
@@ -476,7 +476,6 @@ def ask_integer(
             continue
 
         return number
-
 
 def show_saved_files():
     """نمایش فایل‌های خروجی اسکرپر."""
@@ -560,9 +559,7 @@ def run_custom_url_scrape():
     """گرفتن لینک مستقیم از کاربر و اجرای اسکرپر."""
 
     url = questionary.text(
-        farsi_menu(
-            "لینک صفحه مورد نظر را وارد کن:"
-        )
+        farsi_menu("لینک صفحه مورد نظر را وارد کن:")
     ).ask()
 
     if url is None:
@@ -571,22 +568,11 @@ def run_custom_url_scrape():
     url = url.strip()
 
     if not url:
-        print(
-            farsi(
-                "هیچ لینکی وارد نشد."
-            )
-        )
+        print(farsi("هیچ لینکی وارد نشد."))
         return
 
-    if not url.startswith(
-        ("http://", "https://")
-    ):
-        print(
-            farsi(
-                "لینک معتبر نیست؛ باید با "
-                "http:// یا https:// شروع شود."
-            )
-        )
+    if not url.startswith(("http://", "https://")):
+        print(farsi("لینک معتبر نیست؛ باید با http:// یا https:// شروع شود."))
         return
 
     pages = ask_integer(
@@ -598,29 +584,13 @@ def run_custom_url_scrape():
     if pages is CANCELLED:
         return
 
-    format_choice = questionary.select(
-        farsi_menu(
-            "فرمت ذخیره‌سازی را انتخاب کن:"
-        ),
-        choices=[
-            Choice(
-                "CSV",
-                value="csv",
-            ),
-            Choice(
-                "JSON",
-                value="json",
-            ),
-            Choice(
-                "Excel",
-                value="excel",
-            ),
-            Choice(
-                farsi("همه فرمت‌ها"),
-                value="all",
-            ),
-        ],
-    ).ask()
+    format_options = [
+        {"name": "CSV", "value": "csv"},
+        {"name": "JSON", "value": "json"},
+        {"name": "Excel", "value": "excel"},
+        {"name": "همه فرمت‌ها", "value": "all"},
+    ]
+    format_choice = farsi_menu("فرمت ذخیره‌سازی را انتخاب کن:", format_options)
 
     if format_choice is None:
         return
@@ -756,7 +726,6 @@ def run_scheduler():
     finally:
         conn.close()
 
-
 def run_interactive_menu():
     """نمایش منوی اصلی تعاملی."""
 
@@ -768,13 +737,13 @@ def run_interactive_menu():
     )
 
     menu_choices = [
-        Choice(farsi("شروع استخراج سریع با تنظیمات پیش‌فرض"), value="quick"),
-        Choice(farsi("استخراج با فیلتر و تنظیمات سفارشی"), value="custom"),
-        Choice(farsi("استخراج از طریق لینک مستقیم (URL)"), value="url"),
-        Choice(farsi("بررسی و رصد دوره‌ای لینک (دستی)"), value="tracker"),
-        Choice(farsi("اتوماسیون (اجرای زمان‌بندی‌شده)"), value="automation"),
-        Choice(farsi("نمایش فایل‌های خروجی ذخیره‌شده"), value="files"),
-        Choice(farsi("خروج"), value="exit"),
+        {"name": "اسکرپ تکنولایف (پیش‌فرض)", "value": "technolife"},
+        {"name": "استخراج با فیلتر و تنظیمات سفارشی", "value": "custom"},
+        {"name": "استخراج از طریق لینک مستقیم (URL)", "value": "url"},
+        {"name": "بررسی و رصد دوره‌ای لینک (دستی)", "value": "tracker"},
+        {"name": "اتوماسیون (اجرای زمان‌بندی‌شده)", "value": "automation"},
+        {"name": "نمایش فایل‌های خروجی ذخیره‌شده", "value": "files"},
+        {"name": "خروج", "value": "exit"},
     ]
 
     while True:
@@ -784,10 +753,11 @@ def run_interactive_menu():
             print(farsi("خروج از برنامه."))
             return
 
-        if action == "quick":
+        if action == "technolife":
             run_scraper()
         elif action == "custom":
             run_custom_scrape()
+
         elif action == "url":
             run_custom_url_scrape()
         elif action == "automation":

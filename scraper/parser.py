@@ -2,25 +2,59 @@ import re
 import sys
 import urllib.parse
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import Any, Dict, List, Optional, Tuple
+
 from bs4 import BeautifulSoup
 
-# تنظیم مسیر برای ایمپورت ماژول‌های داخلی
+
+# تنظیم مسیر برای ایمپورت ماژول‌های داخلی پروژه
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from scraper.utils import farsi
 
 
 class ProductParser:
-    """استخراج و ساختاردهی اطلاعات محصولات از کدهای HTML خام"""
+    """استخراج و ساختاردهی اطلاعات محصولات از HTML خام."""
+
+    # ارقام فارسی، عربی و انگلیسی
+    DIGITS_PATTERN = r"\d۰-۹٠-٩"
+
+    # واحدهای قابل پشتیبانی
+    CURRENCY_PATTERN = r"تومان|تومن|ریال"
+
+    # الگوی دقیق قیمت:
+    # 69,300,000
+    # ۶۹,۳۰۰,۰۰۰
+    # 69 300 000
+    # 69300000
+    PRICE_PATTERN = re.compile(
+        rf"""
+        (?<![{DIGITS_PATTERN}])
+        (
+            [{DIGITS_PATTERN}]{{1,3}}
+            (?:\s*[,،]\s*[{DIGITS_PATTERN}]{{3}})+
+
+            |
+
+            [{DIGITS_PATTERN}]{{1,3}}
+            (?:\s+[{DIGITS_PATTERN}]{{3}}){{1,4}}
+
+            |
+
+            [{DIGITS_PATTERN}]{{5,}}
+        )
+        \s*
+        ({CURRENCY_PATTERN})
+        """,
+        re.VERBOSE
+    )
 
     @classmethod
-    def clean_price(cls, raw_price: str) -> int:
-        """تبدیل متن قیمت به عدد صحیح با تبدیل اعداد فارسی و عربی"""
-        if not raw_price or raw_price == "نامشخص":
-            return 0
+    def normalize_digits(cls, text: str) -> str:
+        """تبدیل اعداد فارسی و عربی به اعداد انگلیسی."""
+        if not text:
+            return ""
 
-        # تبدیل اعداد فارسی و عربی به انگلیسی
         persian_digits = "۰۱۲۳۴۵۶۷۸۹"
         arabic_digits = "٠١٢٣٤٥٦٧٨٩"
         english_digits = "0123456789"
@@ -29,105 +63,291 @@ class ProductParser:
             persian_digits + arabic_digits,
             english_digits + english_digits
         )
-        normalized = raw_price.translate(translation_table)
 
-        digits = re.sub(r"[^\d]", "", normalized)
-        return int(digits) if digits else 0
+        return text.translate(translation_table)
 
     @classmethod
-    def parse_product_list(cls, html_content: str) -> List[Dict[str, Any]]:
+    def clean_price(cls, raw_price: str) -> int:
+        """
+        تبدیل متن قیمت به عدد صحیح.
+
+        خروجی قیمت برحسب تومان است.
+        اگر قیمت با واحد ریال باشد، به تومان تبدیل می‌شود.
+        """
+        if not raw_price or raw_price == "نامشخص":
+            return 0
+
+        normalized = cls.normalize_digits(raw_price)
+
+        # جست‌وجوی قیمت دقیق قبل از واحد پول
+        matches = list(cls.PRICE_PATTERN.finditer(normalized))
+
+        if matches:
+            # معمولاً آخرین قیمت داخل کارت، قیمت نهایی فروش است
+            selected_match = matches[-1]
+
+            number_part = selected_match.group(1)
+            currency = selected_match.group(2)
+
+            clean_digits = re.sub(r"[^\d]", "", number_part)
+
+            if not clean_digits:
+                return 0
+
+            price = int(clean_digits)
+
+            # تبدیل ریال به تومان
+            if currency == "ریال":
+                price //= 10
+
+            return price
+
+        # حالت جایگزین برای ورودی‌هایی که واحد پول ندارند
+        number_matches = re.findall(
+            r"\d{1,3}(?:[,،]\d{3})+|\d{5,}",
+            normalized
+        )
+
+        if not number_matches:
+            return 0
+
+        # آخرین عدد معتبر انتخاب می‌شود
+        clean_digits = re.sub(r"[^\d]", "", number_matches[-1])
+
+        return int(clean_digits) if clean_digits else 0
+
+    @classmethod
+    def extract_price_from_text(
+        cls,
+        text: str
+    ) -> Optional[Tuple[str, int]]:
+        """
+        استخراج قیمت معتبر از متن کامل کارت محصول.
+
+        خروجی:
+            (متن قیمت، قیمت عددی برحسب تومان)
+        """
+        if not text:
+            return None
+
+        normalized = cls.normalize_digits(text)
+        matches = list(cls.PRICE_PATTERN.finditer(normalized))
+
+        if not matches:
+            return None
+
+        # آخرین قیمت معمولاً قیمت نهایی پس از تخفیف است
+        selected_match = matches[-1]
+
+        number_part = selected_match.group(1)
+        currency = selected_match.group(2)
+
+        # حذف فاصله‌های اطراف کاما
+        normalized_number = re.sub(r"\s*[,،]\s*", ",", number_part)
+
+        # حذف فاصله در قیمت‌هایی مثل 69 300 000
+        normalized_number = normalized_number.replace(" ", "")
+
+        price_raw = f"{normalized_number} {currency}"
+        price_int = cls.clean_price(price_raw)
+
+        return price_raw, price_int
+
+    @classmethod
+    def extract_title(
+        cls,
+        a_tag,
+        clean_url: str
+    ) -> str:
+        """استخراج عنوان محصول از تگ، متن کارت یا اسلاگ لینک."""
+
+        # روش اول: ویژگی title
+        title = a_tag.get("title", "").strip()
+
+        if title and len(title) >= 5:
+            return title
+
+        # روش دوم: تگ‌های عنوان داخل لینک
+        heading_tag = a_tag.find(["h1", "h2", "h3", "h4"])
+
+        if heading_tag:
+            heading_text = heading_tag.get_text(
+                separator=" ",
+                strip=True
+            )
+
+            if len(heading_text) >= 5:
+                return heading_text
+
+        # روش سوم: پاراگراف داخل لینک
+        paragraph_tag = a_tag.find("p")
+
+        if paragraph_tag:
+            paragraph_text = paragraph_tag.get_text(
+                separator=" ",
+                strip=True
+            )
+
+            if (
+                len(paragraph_text) >= 5
+                and "تومان" not in paragraph_text
+                and "ریال" not in paragraph_text
+            ):
+                return paragraph_text
+
+        # روش چهارم: متن کامل داخل لینک
+        text_inside = a_tag.get_text(separator=" ", strip=True)
+
+        if (
+            len(text_inside) >= 5
+            and "تومان" not in text_inside
+            and "تومن" not in text_inside
+            and "ریال" not in text_inside
+        ):
+            return text_inside
+
+        # روش پنجم: استخراج عنوان از اسلاگ URL
+        path_part = urllib.parse.urlparse(clean_url).path
+        slug = path_part.rstrip("/").split("/")[-1]
+
+        decoded_slug = urllib.parse.unquote(slug)
+        decoded_slug = decoded_slug.replace("-", " ").strip()
+
+        # حذف شناسه احتمالی ابتدای آدرس تکنولایف
+        decoded_slug = re.sub(
+            r"^product\s*\d*\s*",
+            "",
+            decoded_slug,
+            flags=re.IGNORECASE
+        ).strip()
+
+        return decoded_slug
+
+    @classmethod
+    def build_full_url(
+        cls,
+        raw_href: str,
+        base_url: str
+    ) -> str:
+        """تبدیل لینک نسبی محصول به لینک کامل."""
+
+        if raw_href.startswith(("http://", "https://")):
+            full_url = raw_href
+        else:
+            full_url = urllib.parse.urljoin(base_url, raw_href)
+
+        # حذف پارامترهای تبلیغاتی و کوئری‌های اضافی
+        parsed_url = urllib.parse.urlsplit(full_url)
+
+        return urllib.parse.urlunsplit((
+            parsed_url.scheme,
+            parsed_url.netloc,
+            parsed_url.path,
+            "",
+            ""
+        ))
+
+    @classmethod
+    def parse_product_list(
+        cls,
+        html_content: str,
+        base_url: str = "https://www.technolife.com"
+    ) -> List[Dict[str, Any]]:
+        """استخراج فهرست محصولات از HTML تکنولایف یا سایت مشابه."""
+
+        if not html_content:
+            return []
+
         soup = BeautifulSoup(html_content, "html.parser")
-        products = []
+
+        products: List[Dict[str, Any]] = []
         seen_urls = set()
 
-        # استخراج لینک‌های محصولات هر دو سایت (تکنولایف و زومیت)
         links = soup.find_all(
             "a",
-            href=lambda h: h and (
-                "/product-" in h or
-                "/product/" in h or
-                "zoomit.ir" in h
+            href=lambda href: href and (
+                "/product-" in href
+                or "/product/" in href
+                or "technolife.com/product" in href
+                or "zoomit.ir/product" in href
             )
         )
 
         for a_tag in links:
             raw_href = a_tag.get("href", "").strip()
+
             if not raw_href:
                 continue
 
-            # استانداردسازی و ساخت لینک کامل
-            if raw_href.startswith("http"):
-                full_url = raw_href
-            else:
-                full_url = urllib.parse.urljoin("https://www.technolife.com", raw_href)
-
-            clean_url = full_url.split("?")[0]
+            clean_url = cls.build_full_url(
+                raw_href=raw_href,
+                base_url=base_url
+            )
 
             if clean_url in seen_urls:
                 continue
 
-            # ۱. استخراج عنوان محصول
-            title = a_tag.get("title", "").strip()
-            if not title:
-                h_tag = a_tag.find(["h2", "h3", "h4", "p"])
-                if h_tag and len(h_tag.get_text(strip=True)) > 5:
-                    title = h_tag.get_text(strip=True)
-                else:
-                    text_inside = a_tag.get_text(separator=" ", strip=True)
-                    if len(text_inside) > 5 and "تومان" not in text_inside:
-                        title = text_inside
+            title = cls.extract_title(
+                a_tag=a_tag,
+                clean_url=clean_url
+            )
 
-            # استخراج عنوان از اسلاگ در صورت نبود عنوان متنی
             if not title or len(title) < 5:
-                path_part = urllib.parse.urlparse(clean_url).path
-                slug = path_part.rstrip("/").split("/")[-1]
-                decoded_slug = urllib.parse.unquote(slug).replace("-", " ").strip()
-                if decoded_slug:
-                    title = decoded_slug
-
-            if not title:
                 continue
 
-            # ۲. استخراج قیمت: پیمایش المان‌های والد و استخراج عدد همراه با تومان
-            price_text = "نامشخص"
+            price_raw = "نامشخص"
+            price_int = 0
+            product_text = ""
+
             current_parent = a_tag
 
-            for _ in range(5):
+            # حرکت در والدهای لینک برای رسیدن به کارت کامل محصول
+            for _ in range(6):
                 current_parent = current_parent.parent
-                if not current_parent:
+
+                if current_parent is None:
                     break
 
-                p_text = current_parent.get_text(separator=" ", strip=True)
-
-                # تطبیق الگوهای: "۱۲,۰۰۰,۰۰۰ تومان" یا "از ۱۲,۰۰۰,۰۰۰ تومان" یا ریال
-                price_match = re.search(
-                    r"(?:از\s*)?([\d۰-۹٠-٩][\d۰-۹٠-٩,،\s]{2,20})\s*(?:تومان|تومن|ریال)",
-                    p_text
+                parent_text = current_parent.get_text(
+                    separator=" ",
+                    strip=True
                 )
 
-                if not price_match:
-                    price_match = re.search(
-                        r"(?:تومان|تومن|ریال)\s*([\d۰-۹٠-٩][\d۰-۹٠-٩,،\s]{2,20})",
-                        p_text
-                    )
-
-                if price_match:
-                    number_part = price_match.group(1).strip()
-                    price_text = f"{number_part} تومان"
+                # جلوگیری از بررسی والدهای بسیار بزرگ مثل body
+                if len(parent_text) > 5000:
                     break
 
-            price_int = cls.clean_price(price_text)
+                product_text = parent_text
 
-            # بررسی وضعیت موجودی
-            parent_text = current_parent.get_text(separator=" ", strip=True) if current_parent else ""
+                extracted_price = cls.extract_price_from_text(parent_text)
+
+                if extracted_price:
+                    price_raw, price_int = extracted_price
+                    break
+
+            # اگر متن مناسبی از والد پیدا نشد، متن خود لینک بررسی شود
+            if not product_text:
+                product_text = a_tag.get_text(
+                    separator=" ",
+                    strip=True
+                )
+
+            unavailable_phrases = (
+                "ناموجود",
+                "اتمام موجودی",
+                "موجود نیست",
+                "در حال حاضر موجود نیست",
+                "به‌زودی"
+            )
+
             is_available = not any(
-                phrase in parent_text
-                for phrase in ("ناموجود", "اتمام موجودی", "موجود نیست")
+                phrase in product_text
+                for phrase in unavailable_phrases
             )
 
             products.append({
                 "title": title,
-                "price_raw": price_text,
+                "price_raw": price_raw,
                 "price": price_int,
                 "available": is_available,
                 "url": clean_url
@@ -142,31 +362,36 @@ if __name__ == "__main__":
     from scraper.client import HttpClient
 
     print(farsi("در حال تست پارسر HTML..."))
+
     client = HttpClient()
 
-    url = "https://www.technolife.com/category/mobile/mobile-phone/brand-samsung"
+    url = (
+        "https://www.technolife.com/"
+        "category/mobile/mobile-phone/brand-samsung"
+    )
+
     html = client.fetch_html(url)
 
-    if html:
-        items = ProductParser.parse_product_list(html)
-        print(farsi(f"تعداد محصولات استخراج‌شده: {len(items)}"))
-
-        if items:
-            sample = items[0]
-            print(farsi(f"عنوان: {sample['title']}"))
-            print(farsi(f"قیمت خام: {sample['price_raw']}"))
-            print(farsi(f"قیمت عددی: {sample['price']}"))
-            print(farsi(f"موجودی: {sample['available']}"))
-            print(farsi(f"لینک: {sample['url']}"))
-    else:
+    if not html:
         print(farsi("خطا: صفحه‌ای دریافت نشد."))
-import requests
+        sys.exit(1)
 
-def fetch_zoomit_data():
-    api_url = "PASTE_THE_COPIED_URL_HERE"
-    headers = {"User-Agent": "Mozilla/5.0..."} # هدر ضروری است
-    
-    response = requests.get(api_url, headers=headers)
-    if response.status_code == 200:
-        return response.json()
-    return None
+    items = ProductParser.parse_product_list(
+        html_content=html,
+        base_url="https://www.technolife.com"
+    )
+
+    print(farsi(f"تعداد محصولات استخراج‌شده: {len(items)}"))
+
+    if not items:
+        print(farsi("هیچ محصولی استخراج نشد."))
+        sys.exit(0)
+
+    sample = items[0]
+
+    print(farsi("-" * 40))
+    print(farsi(f"عنوان: {sample['title']}"))
+    print(farsi(f"قیمت خام: {sample['price_raw']}"))
+    print(farsi(f"قیمت عددی: {sample['price']:,} تومان"))
+    print(farsi(f"موجودی: {sample['available']}"))
+    print(farsi(f"لینک: {sample['url']}"))

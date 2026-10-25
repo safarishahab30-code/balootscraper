@@ -22,7 +22,7 @@ class HttpClient:
 
         try:
             # غیرفعال کردن ریدایرکت خودکار جهت کنترل دقیق روی دامین ir
-            response = requests.get(url, headers=self.headers, timeout=12, allow_redirects=False)
+            response = requests.get(url, headers=self.headers, timeout=12, allow_redirects=True)
             response.raise_for_status()
             return response.text
         except requests.RequestException as e:
